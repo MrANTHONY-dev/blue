@@ -27,8 +27,6 @@ class Faroswap:
         self.WPHRS_CONTRACT_ADDRESS = "0x3019B247381c850ab53Dc0EE53bCe7A07Ea9155f"
         self.USDC_CONTRACT_ADDRESS = "0x72df0bcd7276f2dFbAc900D1CE63c272C4BCcCED"
         self.USDT_CONTRACT_ADDRESS = "0xD4071393f8716661958F766DF660033b3d35fD29"
-        self.WETH_CONTRACT_ADDRESS = "0x4E28826d32F1C398DED160DC16Ac6873357d048f"
-        self.WBTC_CONTRACT_ADDRESS = "0x8275c526d1bCEc59a31d673929d3cE8d108fF5c7"
         self.MIXSWAP_ROUTER_ADDRESS = "0x3541423f25A1Ca5C98fdBCf478405d3f0aaD1164"
         self.DVM_ROUTER_ADDRESS = "0x4b177AdEd3b8bD1D5D747F91B9E853513838Cd49"
         self.POOL_ROUTER_ADDRESS = "0x73cafc894dbfc181398264934f7be4e482fc9d40"
@@ -36,9 +34,7 @@ class Faroswap:
             "PHRS", 
             "WPHRS", 
             "USDC", 
-            "USDT", 
-            "WETH",
-            "WBTC"
+            "USDT"
         ]
         self.ERC20_CONTRACT_ABI = json.loads('''[
             {"type":"function","name":"balanceOf","stateMutability":"view","inputs":[{"name":"address","type":"address"}],"outputs":[{"name":"","type":"uint256"}]},
@@ -80,8 +76,6 @@ class Faroswap:
         self.wphrs_swap_amount = 0
         self.usdc_swap_amount = 0
         self.usdt_swap_amount = 0
-        self.weth_swap_amount = 0
-        self.wbtc_swap_amount = 0
         self.add_lp_count = 0
         self.phrs_add_lp_amount = 0
         self.wphrs_add_lp_amount = 0
@@ -225,7 +219,11 @@ class Faroswap:
             return getattr(self, f"{ticker}_CONTRACT_ADDRESS")
 
         def get_amount(ticker):
-            return getattr(self, f"{ticker.lower()}_swap_amount")
+            if ticker in ["USDT", "USDC"]:
+                return random.uniform(1, 3)
+            elif ticker in ["PHRS", "WPHRS"]:
+                return random.uniform(0.005, 0.01)
+            return 0
 
         from_token = get_contract(from_ticker)
         to_token = get_contract(to_ticker)
@@ -455,57 +453,61 @@ class Faroswap:
         except Exception as e:
             raise Exception(f"Approving Token Contract Failed: {str(e)}")
 
-    async def perform_swap(self, account: str, address: str, from_token: str, to_token: str, amount: float, use_proxy: bool):
-        try:
-            web3 = await self.get_web3_with_check(address, use_proxy)
-            
-            if from_token != self.PHRS_CONTRACT_ADDRESS:
-                decimals = web3.eth.contract(
-                    address=web3.to_checksum_address(from_token), 
-                    abi=self.ERC20_CONTRACT_ABI
-                ).functions.decimals().call()
-                await self.approving_token(account, address, self.MIXSWAP_ROUTER_ADDRESS, from_token, int(amount * (10 ** decimals)), use_proxy)
-            else:
-                decimals = 18
+    async def perform_swap(self, account: str, address: str, from_token: str, to_token: str, amount: float, use_proxy: bool, retries=5):
+        for attempt in range(retries):
+            try:
+                web3 = await self.get_web3_with_check(address, use_proxy)
 
-            amount_to_wei = int(amount * (10 ** decimals))
+                if from_token != self.PHRS_CONTRACT_ADDRESS:
+                    decimals = web3.eth.contract(
+                        address=web3.to_checksum_address(from_token),
+                        abi=self.ERC20_CONTRACT_ABI
+                    ).functions.decimals().call()
+                    await self.approving_token(account, address, self.MIXSWAP_ROUTER_ADDRESS, from_token, int(amount * (10 ** decimals)), use_proxy)
+                else:
+                    decimals = 18
 
-            dodo_route = await self.get_dodo_route(address, from_token, to_token, amount_to_wei, use_proxy)
-            if not dodo_route:
-                return None, None
+                amount_to_wei = int(amount * (10 ** decimals))
 
-            value = dodo_route.get("data", {}).get("value")
-            calldata = dodo_route.get("data", {}).get("data")
-            gas_limit = dodo_route.get("data", {}).get("gasLimit", 300000)
+                dodo_route = await self.get_dodo_route(address, from_token, to_token, amount_to_wei, use_proxy)
+                if not dodo_route:
+                    return None, None
 
-            max_priority_fee = web3.to_wei(1, "gwei")
-            max_fee = max_priority_fee
+                value = dodo_route.get("data", {}).get("value")
+                calldata = dodo_route.get("data", {}).get("data")
+                gas_limit = dodo_route.get("data", {}).get("gasLimit", 300000)
 
-            swap_tx = {
-                "to": self.MIXSWAP_ROUTER_ADDRESS,
-                "from": address,
-                "data": calldata,
-                "value": int(value),
-                "gas": int(gas_limit),
-                "maxFeePerGas": int(max_fee),
-                "maxPriorityFeePerGas": int(max_priority_fee),
-                "nonce": web3.eth.get_transaction_count(address, "pending"),
-                "chainId": web3.eth.chain_id,
-            }
+                max_priority_fee = web3.to_wei(1, "gwei")
+                max_fee = max_priority_fee
 
-            signed_tx = web3.eth.account.sign_transaction(swap_tx, account)
-            raw_tx = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-            tx_hash = web3.to_hex(raw_tx)
-            receipt = await self.wait_for_receipt_with_retries(web3, tx_hash)
-            block_number = receipt.blockNumber
+                swap_tx = {
+                    "to": self.MIXSWAP_ROUTER_ADDRESS,
+                    "from": address,
+                    "data": calldata,
+                    "value": int(value),
+                    "gas": int(gas_limit),
+                    "maxFeePerGas": int(max_fee),
+                    "maxPriorityFeePerGas": int(max_priority_fee),
+                    "nonce": web3.eth.get_transaction_count(address, "pending"),
+                    "chainId": web3.eth.chain_id,
+                }
 
-            return tx_hash, block_number
-        except Exception as e:
-            self.log(
-                f"{Fore.CYAN+Style.BRIGHT}     Message :{Style.RESET_ALL}"
-                f"{Fore.RED+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
-            )
-            return None, None
+                signed_tx = web3.eth.account.sign_transaction(swap_tx, account)
+                raw_tx = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+                tx_hash = web3.to_hex(raw_tx)
+                receipt = await self.wait_for_receipt_with_retries(web3, tx_hash)
+                block_number = receipt.blockNumber
+
+                return tx_hash, block_number
+            except Exception as e:
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}     Message :{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} {str(e)} ({attempt+1}/{retries}) {Style.RESET_ALL}"
+                )
+                if attempt < retries - 1:
+                    await asyncio.sleep(5)
+                else:
+                    return None, None
         
     async def perform_add_dvm_liquidity(self, account: str, address: str, pair_address: str, base_token: str, quote_token: str, amount: float, use_proxy: bool):
         try:
@@ -633,72 +635,6 @@ class Faroswap:
                     print(f"{Fore.RED + Style.BRIGHT}Please enter positive number.{Style.RESET_ALL}")
             except ValueError:
                 print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a number.{Style.RESET_ALL}")
-
-        while True:
-            try:
-                amount = float(input(f"{Fore.YELLOW + Style.BRIGHT}Enter PHRS Amount for Each Swap Tx [1 or 0.01 or 0.001, etc in decimals] -> {Style.RESET_ALL}").strip())
-                if amount > 0:
-                    self.phrs_swap_amount = amount
-                    break
-                else:
-                    print(f"{Fore.RED + Style.BRIGHT}PHRS Amount must be greater than 0.{Style.RESET_ALL}")
-            except ValueError:
-                print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a float or decimal number.{Style.RESET_ALL}")
-        
-        while True:
-            try:
-                amount = float(input(f"{Fore.YELLOW + Style.BRIGHT}Enter WPHRS Amount for Each Swap Tx [1 or 0.01 or 0.001, etc in decimals] -> {Style.RESET_ALL}").strip())
-                if amount > 0:
-                    self.wphrs_swap_amount = amount
-                    break
-                else:
-                    print(f"{Fore.RED + Style.BRIGHT}WPHRS Amount must be greater than 0.{Style.RESET_ALL}")
-            except ValueError:
-                print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a float or decimal number.{Style.RESET_ALL}")
-        
-        while True:
-            try:
-                amount = float(input(f"{Fore.YELLOW + Style.BRIGHT}Enter USDC Amount for Each Swap Tx [1 or 0.01 or 0.001, etc in decimals] -> {Style.RESET_ALL}").strip())
-                if amount > 0:
-                    self.usdc_swap_amount = amount
-                    break
-                else:
-                    print(f"{Fore.RED + Style.BRIGHT}USDC Amount must be greater than 0.{Style.RESET_ALL}")
-            except ValueError:
-                print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a float or decimal number.{Style.RESET_ALL}")
-        
-        while True:
-            try:
-                amount = float(input(f"{Fore.YELLOW + Style.BRIGHT}Enter USDT Amount for Each Swap Tx [1 or 0.01 or 0.001, etc in decimals] -> {Style.RESET_ALL}").strip())
-                if amount > 0:
-                    self.usdt_swap_amount = amount
-                    break
-                else:
-                    print(f"{Fore.RED + Style.BRIGHT}USDT Amount must be greater than 0.{Style.RESET_ALL}")
-            except ValueError:
-                print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a float or decimal number.{Style.RESET_ALL}")
-        
-        # while True:
-        #     try:
-        #         amount = float(input(f"{Fore.YELLOW + Style.BRIGHT}Enter WETH Amount for Each Swap Tx [1 or 0.01 or 0.001, etc in decimals] -> {Style.RESET_ALL}").strip())
-        #         if amount > 0:
-        #             self.weth_swap_amount = amount
-        #             break
-        #         else:
-        #             print(f"{Fore.RED + Style.BRIGHT}WETH Amount must be greater than 0.{Style.RESET_ALL}")
-        #     except ValueError:
-        #         print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a float or decimal number.{Style.RESET_ALL}")
-        
-        # while True:
-        #     try:
-        #         amount = float(input(f"{Fore.YELLOW + Style.BRIGHT}Enter WBTC Amount for Each Swap Tx [1 or 0.01 or 0.001, etc in decimals] -> {Style.RESET_ALL}").strip())
-        #         if amount > 0:
-        #             self.wbtc_swap_amount = amount
-        #             break
-        #         else:
-        #             print(f"{Fore.RED + Style.BRIGHT}WBTC Amount must be greater than 0.{Style.RESET_ALL}")
-        #     except ValueError:
-        #         print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a float or decimal number.{Style.RESET_ALL}")
 
     def print_add_lp_question(self):
         while True:
@@ -856,6 +792,10 @@ class Faroswap:
                     await asyncio.sleep(3)
                     continue
 
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}     Message :{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} Fetch Dodo Route Failed after {retries} retries: {str(e)} {Style.RESET_ALL}"
+                )
                 return None
     
     async def process_perform_deposit(self, account: str, address: str, use_proxy: bool):
