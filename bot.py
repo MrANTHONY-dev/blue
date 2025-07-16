@@ -203,31 +203,20 @@ class Faroswap:
             return None
 
     def generate_swap_option(self):
-        valid_pairs = [
-            (from_t, to_t) for from_t in self.TICKERS for to_t in self.TICKERS
-            if from_t != to_t and not (
-                (from_t == "PHRS" and to_t == "WPHRS") or 
-                (from_t == "WPHRS" and to_t == "PHRS")
-            )
-        ]
-
-        from_ticker, to_ticker = random.choice(valid_pairs)
+        from_ticker = "PHRS"
+        to_ticker = random.choice(["WPHRS", "USDT", "USDC"])
 
         def get_contract(ticker):
             if ticker == "PHRS":
                 return self.PHRS_CONTRACT_ADDRESS
             return getattr(self, f"{ticker}_CONTRACT_ADDRESS")
 
-        def get_amount(ticker):
-            if ticker in ["USDT", "USDC"]:
-                return random.uniform(1, 3)
-            elif ticker in ["PHRS", "WPHRS"]:
-                return random.uniform(0.005, 0.01)
-            return 0
+        def get_amount():
+            return random.uniform(0.005, 0.01)
 
         from_token = get_contract(from_ticker)
         to_token = get_contract(to_ticker)
-        amount = get_amount(from_ticker)
+        amount = get_amount()
 
         swap_option = f"{from_ticker} to {to_ticker}"
 
